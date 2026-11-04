@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ImageRating</title>
+<script src="/theme.js"></script>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+
+<main id="login" class="login" hidden>
+  <form id="login-form" class="login-card">
+    <h1>ImageRating</h1>
+    <p id="login-sub" class="muted center">输入访问密码</p>
+    <label for="password" class="sr-only">密码</label>
+    <input id="password" type="password" placeholder="密码" autocomplete="current-password" required autofocus>
+    <label for="confirm-password" class="sr-only" id="confirm-label" hidden>再次输入密码</label>
+    <input id="confirm-password" type="password" placeholder="再次输入密码" autocomplete="new-password" hidden>
+    <button id="login-submit" type="submit">登录</button>
+    <p id="login-error" class="error" role="alert"></p>
+  </form>
+</main>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <span class="brand">ImageRating</span>
+    <button id="btn-mode" class="ghost icon" type="button"></button>
+    <label for="search" class="sr-only">搜索文件名</label>
+    <input id="search" type="search" placeholder="搜索文件名" autocomplete="off">
+    <button id="btn-scan" class="ghost icon" type="button" title="扫描图库">⟳</button>
+    <span id="scan-state" class="muted scan-state" role="status" aria-live="polite"></span>
+    <button id="btn-theme" class="ghost icon" type="button"></button>
+    <button id="btn-settings" class="ghost" type="button">设置</button>
+    <button id="btn-logout" class="ghost" type="button">退出</button>
+  </header>
+
+  <div class="layout">
+    <aside class="side" aria-label="筛选与 Collections">
+      <h2 class="side-title">视图</h2>
+      <div id="view-list" class="view-list"></div>
+      <h2 class="side-title">Collections</h2>
+      <ul id="coll-list" class="coll-list"></ul>
+      <button id="coll-new" class="ghost coll-new" type="button">+ 新建</button>
+    </aside>
+
+    <main>
+      <section id="ranking" aria-label="单图评分">
+        <p id="rank-progress" class="muted progress" role="status"></p>
+        <div class="rank-stage">
+          <button id="rank-prev" class="ghost rank-nav" type="button" aria-label="上一张">‹</button>
+          <div class="rank-figure">
+            <img id="rank-img" alt="">
+            <p id="rank-empty" class="muted center" hidden></p>
+          </div>
+          <button id="rank-next" class="ghost rank-nav" type="button" aria-label="下一张">›</button>
+        </div>
+        <div class="rank-controls">
+          <div id="rank-stars" class="stars" role="group" aria-label="评分">
+            <button type="button" data-score="1" aria-pressed="false">★1</button>
+            <button type="button" data-score="2" aria-pressed="false">★2</button>
+            <button type="button" data-score="3" aria-pressed="false">★3</button>
+            <button type="button" data-score="4" aria-pressed="false">★4</button>
+            <button type="button" data-score="5" aria-pressed="false">★5</button>
+          </div>
+          <button id="rank-loved" class="ghost" type="button" aria-pressed="false">❤ 收藏</button>
+          <button id="rank-trash" class="ghost" type="button" aria-pressed="false">🗑 移入 Trash</button>
+          <button id="rank-coll" class="ghost menu-trigger" type="button">+ Collection</button>
+          <button id="rank-organize" class="ghost" type="button" hidden>物理整理</button>
+          <button id="rank-restore" class="ghost" type="button" hidden>恢复</button>
+        </div>
+        <p id="rank-meta" class="rank-meta muted"></p>
+      </section>
+
+      <section id="grid-wrap" aria-label="网格视图" hidden>
+        <div class="grid-bar">
+          <label for="sort" class="sr-only">排序</label>
+          <select id="sort">
+            <option value="newest">最新</option>
+            <option value="oldest">最早</option>
+            <option value="score_high">高分优先</option>
+            <option value="score_low">低分优先</option>
+            <option value="random">随机</option>
+          </select>
+          <span id="grid-count" class="muted"></span>
+        </div>
+        <p class="hint muted">Ctrl / Shift 点击多选 · 空白处拖动框选 · Ctrl+A 全选 · Delete 移入 Trash · 双击卡片看大图 · 右键更多操作</p>
+        <ul id="grid" class="grid"></ul>
+        <p id="empty" class="muted center" hidden>没有符合条件的图片</p>
+        <div class="center"><button id="more" class="ghost" type="button" hidden>加载更多</button></div>
+        <div id="sentinel" aria-hidden="true"></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<dialog id="lightbox" class="lightbox">
+  <button id="lb-close" class="ghost lb-close" type="button" aria-label="关闭大图">✕</button>
+  <img id="lb-img" alt="">
+  <div class="lb-foot">
+    <p id="lb-meta" class="lb-meta"></p>
+    <div class="lb-actions">
+      <div id="lb-stars" class="stars" role="group" aria-label="评分">
+        <button type="button" data-score="1" aria-pressed="false">★1</button>
+        <button type="button" data-score="2" aria-pressed="false">★2</button>
+        <button type="button" data-score="3" aria-pressed="false">★3</button>
+        <button type="button" data-score="4" aria-pressed="false">★4</button>
+        <button type="button" data-score="5" aria-pressed="false">★5</button>
+      </div>
+      <button id="lb-loved" class="ghost" type="button" aria-pressed="false">❤ 收藏</button>
+      <button id="lb-trash" class="ghost" type="button" aria-pressed="false">🗑 移入 Trash</button>
+      <button id="lb-close2" class="ghost" type="button">关闭</button>
+    </div>
+    <p class="lb-hint">1–5 打分 · 0 作废 · L 收藏 · X Trash · ←/→ 切图 · Ctrl+Z 撤回 · Esc / 点击空白 关闭</p>
+  </div>
+</dialog>
+
+<div id="marquee" class="marquee" hidden></div>
+<ul id="ctx" class="ctx" role="menu" aria-label="图片操作" hidden></ul>
+
+<div id="bar" class="bar" role="toolbar" aria-label="批量操作" aria-hidden="true">
+  <span id="bar-count"></span>
+  <button id="bar-rate" class="ghost menu-trigger" type="button">打分 ▾</button>
+  <button id="bar-loved" class="ghost" type="button">❤ 收藏</button>
+  <button id="bar-trash" class="ghost" type="button">移入 Trash</button>
+  <button id="bar-untrash" class="ghost" type="button">移出 Trash</button>
+  <button id="bar-organize" class="ghost" type="button" hidden>物理整理</button>
+  <button id="bar-clear" class="ghost" type="button">取消选择</button>
+</div>
+
+<dialog id="detail" class="drawer">
+  <div class="drawer-head">
+    <h2 id="d-title"></h2>
+    <button class="ghost close" type="button" data-close aria-label="关闭">✕</button>
+  </div>
+  <a id="d-open" target="_blank" rel="noopener"><img id="d-img" alt=""></a>
+  <dl id="d-meta" class="meta"></dl>
+  <h3>评分</h3>
+  <div class="drawer-rating">
+    <div id="d-stars" class="stars" role="group" aria-label="评分">
+      <button type="button" data-score="1" aria-pressed="false">★1</button>
+      <button type="button" data-score="2" aria-pressed="false">★2</button>
+      <button type="button" data-score="3" aria-pressed="false">★3</button>
+      <button type="button" data-score="4" aria-pressed="false">★4</button>
+      <button type="button" data-score="5" aria-pressed="false">★5</button>
+    </div>
+    <button id="d-void" class="ghost" type="button" aria-pressed="false">作废</button>
+  </div>
+  <h3>操作</h3>
+  <div class="drawer-actions">
+    <button id="d-lightbox" class="ghost" type="button">⤢ 看大图</button>
+    <button id="d-loved" class="ghost" type="button" aria-pressed="false">❤ 收藏</button>
+    <button id="d-trash" class="ghost" type="button">移入 Trash</button>
+    <button id="d-organize" class="ghost" type="button" hidden>物理整理</button>
+    <button id="d-restore" class="ghost" type="button" hidden>恢复</button>
+  </div>
+  <h3>Collections</h3>
+  <div id="d-colls" class="chips"></div>
+  <button id="d-coll" class="ghost" type="button">+ 加入 Collection</button>
+  <div id="d-coll-list" class="coll-checks" hidden></div>
+</dialog>
+
+<dialog id="settings" class="drawer">
+  <div class="drawer-head">
+    <h2>设置</h2>
+    <button class="ghost close" type="button" data-close aria-label="关闭">✕</button>
+  </div>
+  <form id="settings-root-form" class="form">
+    <h3>图库根目录</h3>
+    <p class="muted note">ComfyUI 输出目录。保存后若目录发生变化会自动重新扫描。</p>
+    <label for="set-root">根目录</label>
+    <input id="set-root" type="text" spellcheck="false" placeholder="D:/ComfyUI/output">
+    <div class="form-foot"><button type="submit">保存</button></div>
+  </form>
+  <h3>服务器信息</h3>
+  <dl id="set-info" class="meta"></dl>
+  <form id="password-form" class="form">
+    <h3>修改密码</h3>
+    <label for="cur-password">当前密码</label>
+    <input id="cur-password" type="password" autocomplete="current-password">
+    <label for="new-password">新密码（至少 4 位）</label>
+    <input id="new-password" type="password" autocomplete="new-password">
+    <label for="new-password2">确认新密码</label>
+    <input id="new-password2" type="password" autocomplete="new-password">
+    <div class="form-foot"><button type="submit">修改密码</button></div>
+  </form>
+</dialog>
+
+<dialog id="help" class="modal">
+  <div class="drawer-head">
+    <h2>快捷键</h2>
+    <button class="ghost close" type="button" data-close aria-label="关闭">✕</button>
+  </div>
+  <dl class="keys">
+    <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>打分并前进</dd>
+    <dt><kbd>0</kbd></dt><dd>作废（打 0 分，自动进 Trash）并前进</dd>
+    <dt><kbd>Ctrl</kbd>+<kbd>Z</kbd></dt><dd>撤回上一步打分 / 收藏 / Trash / Collection</dd>
+    <dt><kbd>F</kbd> / 点击大图</dt><dd>打开灯箱，近距离看细节（快捷键照常可用）</dd>
+    <dt><kbd>L</kbd></dt><dd>收藏 / 取消收藏</dd>
+    <dt><kbd>X</kbd></dt><dd>移入 / 移出 Trash</dd>
+    <dt><kbd>←</kbd> / <kbd>→</kbd></dt><dd>上一张 / 下一张</dd>
+    <dt><kbd>G</kbd></dt><dd>切换单图 / 网格视图</dd>
+    <dt><kbd>C</kbd></dt><dd>打开 Collection 菜单</dd>
+    <dt><kbd>?</kbd></dt><dd>快捷键说明</dd>
+    <dt><kbd>Ctrl</kbd>+<kbd>A</kbd></dt><dd>网格中全选已加载</dd>
+    <dt><kbd>Delete</kbd></dt><dd>网格中批量移入 Trash</dd>
+    <dt><kbd>Esc</kbd></dt><dd>关闭灯箱 / 取消选择 / 关闭弹窗</dd>
+  </dl>
+</dialog>
+
+<dialog id="coll-name" class="modal">
+  <form id="coll-name-form" class="form">
+    <div class="drawer-head">
+      <h2 id="coll-name-title">新建 Collection</h2>
+      <button class="ghost close" type="button" data-close aria-label="关闭">✕</button>
+    </div>
+    <label for="coll-name-input">名称</label>
+    <input id="coll-name-input" type="text" maxlength="50" autocomplete="off" spellcheck="false">
+    <p id="coll-name-error" class="error" role="alert"></p>
+    <div class="form-foot">
+      <button class="ghost" type="button" data-close>取消</button>
+      <button type="submit">确定</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
