@@ -1,10 +1,10 @@
-# ImageRating 开发约束
+# ImageView 开发约束
 
 ## Project Snapshot
 
-- 是什么：ComfyUI 出图评分与归档的本地单用户 Web 应用。评分/收藏/Collection 只存 SQLite；磁盘文件只在「物理整理 / 恢复」时移动。
-- 阶段：v0.2.1，首版核心链路 + 撤回 / 灯箱 / 手机版已完成（0.2.1 修了关闭灯箱仍显示遮罩的 CSS bug）。
-- 平台：Windows 为主（跑在 ComfyUI 主机，局域网访问），代码本身跨平台；前端需同时适配桌面与手机浏览器（断点 760px，验证视口 390×844）。
+- 是什么：本地图片打标、分类、评分与归档的单用户 Web 应用。评分/收藏/Collection 只存 SQLite；磁盘文件只在「物理整理 / 恢复」时移动。
+- 阶段：v0.3.0，核心链路 + 撤回 / 灯箱 / 手机版 / 快速翻页预加载 / 一键启动与更新已完成（0.2.1 修了关闭灯箱仍显示遮罩的 CSS bug）。
+- 平台：Windows 为主（跑在本机，局域网访问），代码本身跨平台；前端需同时适配桌面与手机浏览器（断点 760px，验证视口 390×844）。
 - 技术：Python 3.10+（uv 管理，本机 `.venv` 为 CPython 3.12.10）+ FastAPI + uvicorn + SQLite（stdlib `sqlite3`）+ Pillow；前端为 `web/` 下的原生 HTML/CSS/JS，**无框架、无构建步骤**。
 
 ## Product Rules（改代码不得破坏）
@@ -44,6 +44,8 @@
 | `app/scan.py` | 递归扫描、缩略图生成、物理整理/恢复 |
 | `app/settings.py` | 读 `config.json`，定位 `web/` 目录 |
 | `app/__main__.py` | `uv run python -m app` 启动入口 |
+| `start.bat` `update.bat` | Windows 双击启动 / 更新并重启服务 |
+| `run.ps1` `run.sh` | PowerShell / shell 兜底启动脚本 |
 | `web/index.html` `web/app.js` `web/app.css` `web/theme.js` | 前端单页 |
 | `tests/test_api.py` `tests/make_samples.py` | 测试与合成样图 |
 | `pyproject.toml` `uv.lock` | 依赖声明与锁定（uv 管理） |
@@ -79,7 +81,7 @@ uv run python -m app                                # 本地起服务，浏览�
 
 - 单分支 `main`，项目由个人维护。
 - 提交信息用 Conventional Commits（`feat: …`、`fix: …`、`docs: …`），按意图拆分。
-- 何时提交由 Leo 决定，Agent 不主动提交。
+- 何时提交由维护者决定，Agent 不主动提交。
 
 ## Definition of Done
 
@@ -90,7 +92,6 @@ uv run python -m app                                # 本地起服务，浏览�
 
 ## Open Decisions
 
-- ComfyUI PNG 内嵌 prompt/workflow 元数据展示：建议后续版本做（读 PNG tEXt chunk 即可，不引入新依赖），当前不实现。
 - 按 Collection 物理归档到各自文件夹：用户当前明确只要「Trash → `_trash/`」这一种物理操作，暂不实现。
 - 多用户/权限：明确不做，单密码单用户。
 - 图片物理删除：明确不做，避免误删；`_trash/` 由用户自行清理。

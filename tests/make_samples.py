@@ -6,9 +6,9 @@
 
 样图特征：
 - 尺寸在 512 / 768 / 1024 之间轮换，内容在渐变 / 几何形状 / 网格 / 噪声之间轮换。
-- 一半文件放到 ``<out>/batch/`` 子目录，模拟 ComfyUI 按日期/批次输出的结构。
+- 一半文件放到 ``<out>/batch/`` 子目录，模拟按批次分目录存放图片的结构。
 - ``--flawed N`` 额外生成 N 张明显有瑕疵的图（严重模糊 / 过曝 / 色偏 / 大片黑边 / 噪点），
-  文件名以 ``flawed_`` 开头，供 Leo 人工验证 Ranking 快捷键手感。
+  文件名以 ``flawed_`` 开头，供人工验证 Ranking 快捷键手感。
 
 本模块不依赖 pytest，测试里可直接 ``from tests import make_samples`` 调用函数。
 """
@@ -171,8 +171,8 @@ def generate(out_dir, count: int = 24, flawed: int = 0, seed: int = 1) -> list[P
         kind = KINDS[i % len(KINDS)]
         in_batch = i % 2 == 1
         sub = out / "batch" if in_batch else out
-        # ComfyUI 风格的递增文件名，保证互不重名
-        stem = f"ComfyUI_{10001 + i:05d}_" if in_batch else f"ComfyUI_{i + 1:05d}_"
+        # 递增文件名，保证互不重名
+        stem = f"IMG_{10001 + i:05d}" if in_batch else f"IMG_{i + 1:05d}"
         paths.append(make_image(sub / f"{stem}.png", size=size, kind=kind, seed=seed + i))
 
     for j in range(flawed):

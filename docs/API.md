@@ -1,4 +1,4 @@
-# ImageRating API 契约
+# ImageView API 契约
 
 前后端唯一契约。改动接口必须先改本文件。实现见 `app/main.py`。
 
@@ -17,8 +17,8 @@
 ```json
 {
   "id": 12,
-  "filename": "ComfyUI_00001_.png",
-  "rel_path": "2026-10-31/ComfyUI_00001_.png",
+  "filename": "IMG_00001.png",
+  "rel_path": "2026-10-31/IMG_00001.png",
   "size": 1234567,
   "mtime": 1761926400.0,
   "width": 1024,
@@ -209,7 +209,7 @@
 
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
-| GET | `/api/settings` | – | `{"version": "0.2.1", "root": "D:/ComfyUI/output", "host": "0.0.0.0", "port": 17900, "data_dir": "D:/Desktop/ImageRating/data"}` |
+| GET | `/api/settings` | – | `{"version": "0.3.0", "root": "D:/Pictures", "host": "0.0.0.0", "port": 17900, "data_dir": "D:/Apps/ImageView/data"}` |
 | PUT | `/api/settings` | `{"root": "...", "current_password": "...", "new_password": "..."}` 均可选 | `{"ok": true, "scan_started": bool}` |
 
 - `root` 必须存在且是目录，否则 400；改变 root 后自动触发重扫描，`scan_started = true`（若已有扫描在跑则为 `false`）。

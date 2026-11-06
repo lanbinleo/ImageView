@@ -983,7 +983,7 @@ class TestSettings(ApiTestCase):
 
         images = self.images()
         self.assertEqual(images["total"], 3, "改 root 后应自动扫描新目录")
-        self.assertIsNotNone(self.find("ComfyUI_00001_.png"))
+        self.assertIsNotNone(self.find("IMG_00001.png"))
 
 
 if __name__ == "__main__":

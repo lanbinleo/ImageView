@@ -1,4 +1,4 @@
-# ImageRating 开发指南
+# ImageView 开发指南
 
 面向修改代码的人（包括编码 Agent）。系统设计见 [ARCHITECTURE.md](ARCHITECTURE.md)，接口契约见 [API.md](API.md)，部署见 [DEPLOYMENT.md](DEPLOYMENT.md)，必须遵守的产品规则见 [AGENTS.md](../AGENTS.md)。
 
@@ -20,7 +20,7 @@ uv add --dev <包名>
 ## 2. 目录结构
 
 ```
-ImageRating/
+ImageView/
 ├─ app/                 后端（FastAPI）
 │  ├─ __init__.py       版本号
 │  ├─ __main__.py       python -m app 启动入口（读 config.json）
@@ -39,7 +39,7 @@ ImageRating/
 │  └─ make_samples.py   合成样图生成器
 ├─ docs/                API / 架构 / 部署 / 开发 / 截图
 ├─ config.example.json  部署配置示例（复制为 config.json）
-├─ run.ps1 / run.sh / start.bat  启动脚本
+├─ start.bat / update.bat / run.ps1 / run.sh  启动与更新脚本
 ├─ pyproject.toml / uv.lock     依赖声明与锁定
 └─ AGENTS.md            编码 Agent 的项目约束
 ```
@@ -145,6 +145,7 @@ class TestSomething(ApiTestCase):
 自动化测试覆盖不到的部分，改完必须在真实浏览器过一遍：
 
 - [ ] Ranking：大图居中、`1`–`5` 打分后自动前进、`0` 作废进 Trash、`L` 收藏、`←/→` 切换
+- [ ] Ranking 预加载：快速连按 `→` / 打分自动前进时下一张直接出现；DevTools Network 里能看到后续 `/api/img/full` 提前请求，页尾翻页不等待
 - [ ] 灯箱：Ranking 按 `F` / 点大图打开，打分后跟随前进；网格双击 / 右键 / 抽屉按钮打开且锁定单张；`Esc` 关闭后遮罩完全消失
 - [ ] `Ctrl+Z`：打分、收藏、Trash、Collection 都能逐步撤回，撤回后统计与列表一致
 - [ ] Grid：无限滚动、Ctrl/Shift 多选、框选、批量操作、右键菜单
@@ -163,7 +164,7 @@ class TestSomething(ApiTestCase):
 5. README「更新日志」补上本版本条目。
 6. `git status --short` 干净，确认没有 `data/`、`config.json`、`tests/samples/`、`.venv/`、`__pycache__`。
 7. 提交信息用 Conventional Commits（`feat:` / `fix:` / `docs:` / `chore:`），按意图拆分。
-8. 如果要打包发给别人，文件名带版本号（例如 `ImageRating-v0.2.1.zip`），并排除 `.venv/`、`data/`、`config.json`、`tests/samples/`。
+8. 如果要打包发给别人，文件名带版本号（例如 `ImageView-v0.3.0.zip`），并排除 `.venv/`、`data/`、`config.json`、`tests/samples/`。
 
 ## 10. 常见开发问题
 
