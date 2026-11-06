@@ -133,7 +133,7 @@
 ```
 
 - `op=rate` 用 `score`，`op=loved` 用 `loved`，`op=trash` 用 `trashed`；联动规则同上。
-- 响应 `{"updated": 3}`；不存在的 id 静默忽略。
+- 响应 `{"updated": 3, "items": [Image, ...]}`；`items` 是更新后的完整 Image（按请求 `ids` 顺序，不存在的 id 不返回），前端用它校准乐观更新。不存在的 id 在 `updated` 里也不计入。
 - 属于 Trash 的图批量打 1–5 分会被移出 Trash（与单张一致）。
 
 ### 撤回专用：精确状态回填
@@ -147,7 +147,7 @@
 
 - 只更新 `items[i]` 中**显式给出**的字段（字段缺省＝不动，显式 `null`＝清空）；不走 `rate` 的 Trash 联动规则，用于前端 Ctrl+Z 把图恢复成操作前的精确状态。
 - 可用字段：`score`（0–5 或 null）、`trashed`（bool）、`loved`（bool）、`rated_at`（Unix 秒或 null）。
-- 响应 `{"updated": 2}`；不存在的 id 静默忽略；`score` 超出 0–5 返回 400。
+- 响应 `{"updated": 2, "items": [Image, ...]}`；`items` 为回填后的完整 Image，按提交顺序返回，不存在的 id 不返回；`score` 超出 0–5 返回 400。
 
 ## Collections
 
@@ -209,7 +209,7 @@
 
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
-| GET | `/api/settings` | – | `{"version": "0.3.0", "root": "D:/Pictures", "host": "0.0.0.0", "port": 17900, "data_dir": "D:/Apps/ImageView/data"}` |
+| GET | `/api/settings` | – | `{"version": "0.4.0", "root": "D:/Pictures", "host": "0.0.0.0", "port": 17900, "data_dir": "D:/Apps/ImageView/data"}` |
 | PUT | `/api/settings` | `{"root": "...", "current_password": "...", "new_password": "..."}` 均可选 | `{"ok": true, "scan_started": bool}` |
 
 - `root` 必须存在且是目录，否则 400；改变 root 后自动触发重扫描，`scan_started = true`（若已有扫描在跑则为 `false`）。

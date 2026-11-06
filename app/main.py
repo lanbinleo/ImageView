@@ -130,6 +130,15 @@ def create_app(data_dir: str | None = None) -> FastAPI:
             max_age=auth.SESSION_TTL, httponly=True, samesite="lax", path="/",
         )
 
+    def items_of(conn, ids: list[int]) -> list[dict]:
+        """按 id 顺序返回当前 item（忽略不存在的 id）；批量接口回传给前端做乐观更新校准。"""
+        items = []
+        for image_id in dict.fromkeys(ids):
+            item = db.item_of(conn, image_id)
+            if item is not None:
+                items.append(item)
+        return items
+
     def start_scan(request: Request, conn) -> bool:
         """启动后台扫描线程；已在跑就返回 False。"""
         root = root_of(conn)
@@ -259,6 +268,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         if body.op == "state":
             # 前端 Ctrl+Z 撤回：按提交的字段精确回填，不走 rate 的 Trash 联动规则。
             updated = 0
+            touched: list[int] = []
             for patch in body.items:
                 fields = patch.model_dump(exclude_unset=True)
                 image_id = fields.pop("id", None)
@@ -268,8 +278,9 @@ def create_app(data_dir: str | None = None) -> FastAPI:
                     raise HTTPException(400, "分数必须是 0–5 或 null")
                 sql = f"UPDATE images SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?"
                 updated += conn.execute(sql, [*fields.values(), image_id]).rowcount
+                touched.append(image_id)
             conn.commit()
-            return {"updated": updated}
+            return {"updated": updated, "items": items_of(conn, touched)}
         ids = [int(i) for i in body.ids]
         if not ids:
             return {"updated": 0}
@@ -293,7 +304,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         else:
             raise HTTPException(400, f"未知操作：{body.op}")
         conn.commit()
-        return {"updated": cur.rowcount}
+        return {"updated": cur.rowcount, "items": items_of(conn, ids)}
 
     # ---------- Collections ----------
 

@@ -650,6 +650,23 @@ class TestBatch(ApiTestCase):
         for image_id in ids:
             self.assertEqual(self.get_image(image_id)["score"], 2)
 
+    def test_batch_returns_updated_items(self):
+        images = self.add_samples(count=2)
+        ids = [item["id"] for item in images.values()]
+
+        data = self.batch(ids, "rate", score=4)
+        self.assertEqual({item["id"] for item in data["items"]}, set(ids))
+        for item in data["items"]:
+            self.assertEqual(item["score"], 4)
+            self.assertFalse(item["trashed"])
+
+        data = self.post_json("/api/images/batch", {
+            "op": "state",
+            "items": [{"id": ids[0], "score": None, "trashed": False}],
+        })
+        self.assertEqual([item["id"] for item in data["items"]], [ids[0]])
+        self.assertIsNone(data["items"][0]["score"])
+
     # ---------------- 撤回用的精确状态回填 ----------------
 
     def test_batch_state_restores_exact_meta(self):
