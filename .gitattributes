@@ -1,6 +1,13 @@
 # 文本文件按 LF 入库与检出（跨平台一致性；本机 git 配置了 autocrlf=true，这里显式覆盖）
 * text=auto eol=lf
 
+# Windows 启动/更新脚本在工作区必须是 CRLF：
+# cmd.exe 与 Windows PowerShell 5.1 对 LF 换行的 .bat/.ps1 兼容性差
+# （.bat 里的 goto/label、.ps1 的解析都可能出怪问题）。
+# .ps1 另外要求 UTF-8 with BOM，否则 PowerShell 5.1 会把中文当 ANSI 读成乱码。
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
 # 图片按二进制处理，不做换行符转换
 *.png binary
 *.jpg binary
