@@ -3,20 +3,20 @@
 ## Project Snapshot
 
 - 是什么：本地图片打标、分类、评分与归档的单用户 Web 应用。评分/收藏/Collection 只存 SQLite；磁盘文件只在「物理整理 / 恢复」时移动。
-- 阶段：v0.3.0，核心链路 + 撤回 / 灯箱 / 手机版 / 快速翻页预加载 / 一键启动与更新已完成（0.2.1 修了关闭灯箱仍显示遮罩的 CSS bug）。
+- 阶段：v0.4.0，核心链路 + 撤回 / 灯箱 / 手机版 / 快速翻页预加载 / 本地优先乐观更新 / 一键启动与更新已完成（0.2.1 修了关闭灯箱仍显示遮罩的 CSS bug）。
 - 平台：Windows 为主（跑在本机，局域网访问），代码本身跨平台；前端需同时适配桌面与手机浏览器（断点 760px，验证视口 390×844）。
 - 技术：Python 3.10+（uv 管理，本机 `.venv` 为 CPython 3.12.10）+ FastAPI + uvicorn + SQLite（stdlib `sqlite3`）+ Pillow；前端为 `web/` 下的原生 HTML/CSS/JS，**无框架、无构建步骤**。
 
 ## Product Rules（改代码不得破坏）
 
 - `score`：`null` 未评分、`0` 有明显瑕疵作废、`1..5` 星级。
-- 打 `0` 分 → 自动进 Trash（`trashed=1`）；打 `1..5` → 自动移出 Trash；`score=null` 只清空分数、不改 Trash 状态。这条联动只在后端实现，前端不得重复实现。
+- 打 `0` 分 → 自动进 Trash（`trashed=1`）；打 `1..5` → 自动移出 Trash；`score=null` 只清空分数、不改 Trash 状态。联动由后端最终决定；前端乐观更新只能做镜像预测（`predictedRateFields`），且必须用服务端返回的 item 校准。
 - `loved` 是独立布尔 meta，与 Collection 无关。
 - Collection 多对多；Trash 是内置集合，用 `trashed` 字段表示，不可删除。
 - 除 `POST /api/organize` 与 `POST /api/restore` 外，任何操作都不得读写/移动/删除用户的图片文件。
 - `missing=1` 的图默认不出现在列表与统计里；`rel_path` 以 `_trash/` 开头的行不参与 missing 标记。
 - `view=all` 包含 Trash 中的图，只排除 missing。
-- `Ctrl+Z` 撤回只覆盖 Meta 操作（打分 / 收藏 / Trash / Collection），实现为前端内存撤回栈 + `POST /api/images/batch {op:"state"}` 精确回填；物理整理/恢复不进入撤回栈（它们有显式的「恢复」）。
+- `Ctrl+Z` 撤回只覆盖 Meta 操作（打分 / 收藏 / Trash / Collection），实现为前端内存撤回栈 + `POST /api/images/batch {op:"state"}` 精确回填；撤回也先在本地生效、再后台确认；物理整理/恢复不进入撤回栈（它们有显式的「恢复」）。
 - 灯箱是 `<dialog id="lightbox">`（需叠在详情抽屉之上）；全局快捷键的「有 dialog 就禁用」判断必须排除灯箱，否则灯箱内快捷键失效。
 - 自定义 `dialog` 的 CSS：基础规则必须保持 `display: none`，只在 `[open]` 里写 `display: flex`；否则作者样式会盖掉浏览器对关闭 dialog 的默认隐藏，导致一打开页面就被透明遮罩挡住（v0.2.1 修过这个 bug）。
 - 灯箱可从 Ranking 大图、网格双击 / 右键、抽屉按钮打开；从 Ranking 打开时跟随当前图并支持打分后自动前进，从网格打开时锁定单张。
@@ -30,6 +30,7 @@
 - 缩略图：最长边 512 的 WebP，缓存在 `data/thumbs/<id>-<mtime>.webp`，URL 带 `?v=mtime` 长缓存。
 - 前端只允许调用 `docs/API.md` 中的接口。
 - 不引入前端框架、打包器或 CDN 资源（必须离线可用）。
+- 前端 Meta 操作采用本地优先：乐观更新 + 串行请求队列（`web/app.js` 的 `enqueueOp`）；服务端响应回来用 item 校准，失败时回滚。批量接口响应带 `items` 供校准。
 - 测试用标准库 `unittest` + `fastapi.testclient`，不引入 pytest。
 
 ## Important Files

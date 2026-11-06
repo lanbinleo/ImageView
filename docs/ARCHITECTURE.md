@@ -50,7 +50,7 @@
 | `app/main.py` | `create_app()` 工厂、全部路由、鉴权依赖、扫描线程、静态文件 | 测试与脚本只能用工厂，不能 import 模块级 app |
 | `app/scan.py` | 递归扫描、缩略图、物理整理 / 恢复 | 唯一允许移动图片文件的代码 |
 | `web/index.html` | 页面骨架：登录、顶栏、侧栏、Ranking、Grid、灯箱、抽屉、弹窗 | 全部界面元素在这里声明一次 |
-| `web/app.js` | 状态、渲染、事件、API 调用、撤回栈 | 按 `---------- Ranking ----------` 等注释分段 |
+| `web/app.js` | 状态、渲染、事件、API 调用、乐观更新队列、撤回栈 | 按 `---------- Ranking ----------` 等注释分段 |
 | `web/app.css` | 主题变量、布局、响应式（760px 断点）、组件样式 | 深/浅色由 CSS 变量切换 |
 | `web/theme.js` | 首帧前读取 `localStorage.theme` 写入 `data-theme` | 避免主题闪烁，必须同步执行 |
 | `tests/test_api.py` | HTTP 层集成测试，按 `docs/API.md` 断言 | 每个用例独立临时 `data_dir` 与图片根目录 |
@@ -171,9 +171,10 @@ POST /api/setup  ──┐   ┌── POST /api/login
 **数据流**：
 
 - `api()` 统一封装 `fetch`；收到 401 时回到登录页。
-- 单张操作（打分 / 收藏 / Trash）与批量操作走 `docs/API.md` 定义的接口；响应里的最新 item 覆盖本地缓存。
-- 统计与 Collection 计数在列表响应里整体刷新（`applyMeta`）。
-- 撤回栈只存在内存里（上限 50 条），刷新页面即丢；它只记录 Meta 操作，回填走 `POST /api/images/batch {op:"state"}` 的精确字段更新，不触发评分→Trash 联动。
+- 单张 / 批量 Meta 操作是**本地优先**：先按预测结果改本地状态并立刻重画，再把请求放进串行队列（`enqueueOp`）后台发送；服务端返回的 item 会校准本地（批量接口响应也带 `items`），失败则回滚并提示。
+- 评分→Trash 的即时效果是后端规则的镜像预测（`predictedRateFields`），服务端响应始终是最终真相。
+- 统计与 Collection 计数在列表响应里整体刷新（`applyMeta`），本地优先阶段可能短暂滞后。
+- 撤回栈只存在内存里（上限 50 条），刷新页面即丢；它只记录 Meta 操作，`Ctrl+Z` 也先在本地回填，再走 `POST /api/images/batch {op:"state"}` 的精确字段更新，不触发评分→Trash 联动。
 
 **弹层**：详情抽屉、设置、快捷键、命名框都是 `<dialog>`；灯箱是叠在抽屉之上的 `<dialog id="lightbox">`。全局快捷键遇到「有打开的非灯箱 dialog」才禁用 —— 灯箱内必须继续响应打分与切图。CSS 规则必须保持「基础 `display: none`，仅 `[open]` 时 `display: flex`」，否则关闭状态会被作者样式强行显示成透明遮罩（v0.2.1 修过）。
 
@@ -186,6 +187,7 @@ POST /api/setup  ──┐   ┌── POST /api/login
 - SQLite 单写者：连接按请求创建，`WAL` + `busy_timeout = 30000` 兜住读写并发；关闭连接由依赖的 `finally` 保证。
 - 扫描线程使用自己的连接；每处理一个文件提交一次，避免长时间持锁阻塞前端操作。
 - 没有跨请求事务，也没有分布式锁；所有「检查 + 写入」以单次请求内的 SQL 语句为准。
+- 前端乐观更新与后端之间可能短暂不一致：请求按操作顺序串行发送，响应回来会用服务端 item 校准；刷新页面即回到服务端真相。
 - `app.state.scan` 是进程内字典；**只支持单 worker / 单实例**。`uvicorn --workers 2` 或同时启动两个服务指向同一 `data_dir` 会导致进度状态不一致、并发扫描和写锁竞争。
 - 整理 / 恢复的「检查 + 移动」不是原子操作；失败只影响当前这张图，并在响应 `failed` 中说明。
 

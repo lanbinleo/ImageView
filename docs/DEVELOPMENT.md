@@ -31,7 +31,7 @@ ImageView/
 │  └─ settings.py       读 config.json、定位 web/
 ├─ web/                 前端单页（无构建）
 │  ├─ index.html        页面骨架与所有 dialog
-│  ├─ app.js            状态、渲染、事件、API、撤回栈
+│  ├─ app.js            状态、渲染、事件、API、乐观更新队列、撤回栈
 │  ├─ app.css           主题变量、布局、响应式
 │  └─ theme.js          首帧主题注入
 ├─ tests/
@@ -105,7 +105,8 @@ uv run python tests/make_samples.py --out .\tests\samples --count 24 --flawed 6
 - **快捷键**：统一在 `document` 的 keydown 里处理，先排除输入框聚焦与「有非灯箱 dialog 打开」；灯箱必须继续响应打分 / 切图。改快捷键同步三处：README、`index.html` 的帮助弹窗、keydown 实现。
 - **响应式**：断点 760px；改布局后在 390×844 视口过一遍 Ranking、Grid、灯箱、抽屉。
 - **本地存储**：主题 `theme`、筛选 `ir.filter`、排序 `ir.sort`；新增持久化键用 `lsGet` / `lsSet` 包裹（隐私模式下会抛异常）。
-- **撤回**：只覆盖 Meta 操作；新增可撤回操作时先 `pushMetaUndo()` 记录旧值，再发请求；物理整理 / 恢复不要进撤回栈。
+- **本地优先（乐观更新）**：Meta 操作先改本地 `state` 并立刻重画，再 `enqueueOp()` 把请求放进串行队列；服务端返回的 item 校准本地，失败回滚。批量接口响应带 `items`。新增 Meta 操作沿用这个流程，不要在点击处理里 `await api(...)` 后才改 UI。
+- **撤回**：只覆盖 Meta 操作；新增可撤回操作时在操作开始时 `pushUndo()` 记录旧值；撤回本身也先在本地生效、再后台确认；物理整理 / 恢复不要进撤回栈。
 
 ## 7. 测试
 
@@ -148,6 +149,7 @@ class TestSomething(ApiTestCase):
 - [ ] Ranking 预加载：快速连按 `→` / 打分自动前进时下一张直接出现；DevTools Network 里能看到后续 `/api/img/full` 提前请求，页尾翻页不等待
 - [ ] 灯箱：Ranking 按 `F` / 点大图打开，打分后跟随前进；网格双击 / 右键 / 抽屉按钮打开且锁定单张；`Esc` 关闭后遮罩完全消失
 - [ ] `Ctrl+Z`：打分、收藏、Trash、Collection 都能逐步撤回，撤回后统计与列表一致
+- [ ] 弱网手感：DevTools 设 1–2 秒延迟后，打分自动前进、收藏 / Trash、Ctrl+Z 仍然即时；刷新页面后状态与服务端一致
 - [ ] Grid：无限滚动、Ctrl/Shift 多选、框选、批量操作、右键菜单
 - [ ] Collection：新建 / 改名 / 删除、加图 / 移出、重名提示
 - [ ] 物理整理 / 恢复：整理后文件出现在 `_trash/`、页面显示已整理、恢复后回到原位
@@ -164,7 +166,7 @@ class TestSomething(ApiTestCase):
 5. README「更新日志」补上本版本条目。
 6. `git status --short` 干净，确认没有 `data/`、`config.json`、`tests/samples/`、`.venv/`、`__pycache__`。
 7. 提交信息用 Conventional Commits（`feat:` / `fix:` / `docs:` / `chore:`），按意图拆分。
-8. 如果要打包发给别人，文件名带版本号（例如 `ImageView-v0.3.0.zip`），并排除 `.venv/`、`data/`、`config.json`、`tests/samples/`。
+8. 如果要打包发给别人，文件名带版本号（例如 `ImageView-v0.4.0.zip`），并排除 `.venv/`、`data/`、`config.json`、`tests/samples/`。
 
 ## 10. 常见开发问题
 
