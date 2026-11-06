@@ -552,7 +552,7 @@ function syncStarButtons(container, item) {
   });
 }
 
-// 收藏 / Trash 等单张改动后同步本地数据（不重复后端联动规则，只使用返回的 item）。
+// 服务端返回 item（可能叠加上仍在排队的本地预测）后同步本地数据；不再重复后端的联动规则。
 function afterSingleChange(updated) {
   replaceItem(updated);
   if (state.detail && state.detail.id === updated.id) state.detail = updated;
@@ -610,11 +610,192 @@ function refreshMeta() {
   }, 150);
 }
 
+/* ---------- 本地优先：乐观更新队列 ---------- */
+
+let opSeq = 0;
+let opCurrent = null;
+const opQueue = [];
+let opRunning = false;
+
+// 服务端响应回来时，把仍排在后面的本地预测叠回去，避免界面被旧响应“盖回去”。
+function pendingFieldsFor(id, excludeSeq) {
+  const out = {};
+  const ops = opCurrent ? [opCurrent, ...opQueue] : opQueue.slice();
+  for (const op of ops) {
+    if (excludeSeq !== undefined && op.seq === excludeSeq) continue;
+    for (const patch of op.patches || []) {
+      if (patch.id === id) Object.assign(out, patch.fields);
+    }
+  }
+  return out;
+}
+
+function itemsOfResponse(data) {
+  if (!data) return [];
+  if (Array.isArray(data.items)) return data.items;
+  if (data.item) return [data.item];
+  return [];
+}
+
+function reconcileServerItems(items, excludeSeq) {
+  for (const serverItem of items) {
+    afterSingleChange(Object.assign({}, serverItem, pendingFieldsFor(serverItem.id, excludeSeq)));
+  }
+}
+
+// 列表接口返回的 item 也叠上还没确认的本地预测，避免翻页时出现“旧数据回跳”。
+function mergePendingFields(item) {
+  const fields = pendingFieldsFor(item.id);
+  return Object.keys(fields).length ? Object.assign({}, item, fields) : item;
+}
+
+async function refreshItemsFromServer(ids) {
+  for (const id of [...new Set(ids)]) {
+    try {
+      const fresh = await api('GET', `/api/images/${id}`);
+      const merged = Object.assign({}, fresh, pendingFieldsFor(id));
+      afterSingleChange(merged);
+      restoreItemsIntoRank([merged]);
+    } catch { /* 恢复失败时保留本地状态，下一次操作再校准 */ }
+  }
+  if (state.mode === 'grid') loadGrid(1, { keepSelection: true });
+}
+
+function removeUndoEntry(entry) {
+  if (!entry) return;
+  const index = undoStack.indexOf(entry);
+  if (index >= 0) undoStack.splice(index, 1);
+}
+
+// 只负责把请求排队并后台发送；界面在调用处已经先改好。
+function enqueueOp(op) {
+  opQueue.push(op);
+  if (!opRunning) runOpQueue();
+}
+
+async function runOpQueue() {
+  if (opRunning) return;
+  opRunning = true;
+  try {
+    while (opQueue.length) {
+      const op = opQueue.shift();
+      opCurrent = op;
+      try {
+        const data = await op.request();
+        reconcileServerItems(itemsOfResponse(data), op.seq);
+        if (op.after) op.after(data);
+      } catch (err) {
+        if (op.undoEntry) removeUndoEntry(op.undoEntry);
+        if (op.onError) {
+          op.onError(err);
+        } else {
+          if (err.message !== '未登录') toast(`操作失败：${err.message}`);
+          refreshItemsFromServer(op.ids);
+        }
+      } finally {
+        opCurrent = null;
+      }
+    }
+  } finally {
+    opRunning = false;
+    opCurrent = null;
+  }
+}
+
+// 把预测字段写到本地所有引用这份 item 的地方（Ranking / Grid / 详情 / 刚被本地移出的缓存）。
+function applyLocalPatches(patches) {
+  const touched = new Map();
+  for (const { id, fields } of patches) {
+    for (const list of [state.rank.items, state.grid.items]) {
+      const item = list.find((x) => x.id === id);
+      if (item) Object.assign(item, fields);
+    }
+    if (state.detail && state.detail.id === id) Object.assign(state.detail, fields);
+    const item = findItem(id)
+      || (state.detail && state.detail.id === id ? state.detail : null)
+      || removedItems.get(id)
+      || null;
+    if (!item) continue;
+    Object.assign(item, fields);
+    touched.set(id, item);
+  }
+  return [...touched.values()];
+}
+
+// 本地改完后立刻重画；不需要再等接口返回。
+function refreshLocalItems(items) {
+  for (const item of items) {
+    if (state.mode === 'grid') {
+      updateGridCard(item);
+    } else {
+      const current = currentItem();
+      if (current && current.id === item.id) {
+        if (!inFilter(item)) dropRankItem(item.id);
+        else renderRank();
+      }
+    }
+  }
+  if (state.detail && $('#detail').open) {
+    renderDetail(state.detail);
+    if (!$('#d-coll-list').hidden) renderDetailCollChecks(state.detail);
+  }
+  if (state.lightbox.on) renderLightbox();
+  refreshMeta();
+}
+
+// 撤回把图重新放回当前筛选时，Ranking 列表里也要补回来（并停在撤回的那张上）。
+function restoreItemsIntoRank(items) {
+  if (state.mode !== 'ranking') return;
+  let changed = false;
+  for (const item of items) {
+    if (!inFilter(item)) continue;
+    if (state.rank.items.some((x) => x.id === item.id)) continue;
+    const at = Math.min(state.rank.index, state.rank.items.length);
+    state.rank.items.splice(at, 0, item);
+    state.rank.total += 1;
+    removedItems.delete(item.id);
+    changed = true;
+  }
+  if (changed) renderRank();
+}
+
+// 仅为「立即反馈」镜像后端的评分→Trash 联动；服务端响应回来后会覆盖这里的预测。
+function predictedRateFields(item, score) {
+  const fields = { score, rated_at: score === null ? null : Date.now() / 1000 };
+  if (score === 0) fields.trashed = true;
+  else if (score !== null) fields.trashed = false;
+  return fields;
+}
+
+function setItemCollection(item, collection, add) {
+  const rest = (item.collections || []).filter((c) => c.id !== collection.id);
+  item.collections = add ? [...rest, { id: collection.id, name: collection.name }] : rest;
+}
+
+// 本地已知的 item：当前列表 / 详情 / 刚被本地移出 Ranking 的缓存。
+function knownItem(id) {
+  return locateItem(id) || removedItems.get(id) || null;
+}
+
+function knownItems(ids) {
+  return [...new Set(ids)].map(knownItem).filter(Boolean);
+}
+
+function setCollectionsLocal(ids, collection, add) {
+  for (const id of ids) {
+    for (const list of [state.rank.items, state.grid.items]) {
+      const item = list.find((x) => x.id === id);
+      if (item) setItemCollection(item, collection, add);
+    }
+    if (state.detail && state.detail.id === id) setItemCollection(state.detail, collection, add);
+    if (removedItems.has(id)) setItemCollection(removedItems.get(id), collection, add);
+  }
+}
+
 /* ---------- 撤回（Ctrl+Z） ---------- */
 
 const UNDO_LIMIT = 50;
 const undoStack = [];
-let undoBusy = false;
 
 // 只记录这次操作真正改到的字段；撤回时精确回填，不覆盖期间的其他改动。
 function metaPatch(item, fields) {
@@ -642,55 +823,69 @@ function pushMetaUndo(label, ids, fields) {
   if (patches.length) pushUndo({ label, patches });
 }
 
-async function undoLast() {
-  if (undoBusy) return;
+function undoLast() {
   const entry = undoStack.pop();
   if (!entry) {
     toast('没有可撤回的操作');
     return;
   }
-  undoBusy = true;
-  try {
-    if (entry.collection) {
-      await api('POST', `/api/collections/${entry.collection.id}/images`, {
+  if (entry.collection) {
+    const collection = state.collections.find((c) => c.id === entry.collection.id) || entry.collection;
+    const wantAdd = entry.inverse === 'add';
+    const touched = knownItems(entry.ids);
+    setCollectionsLocal(entry.ids, collection, wantAdd);
+    restoreItemsIntoRank(touched);
+    refreshLocalItems(touched);
+    enqueueOp({
+      seq: ++opSeq,
+      ids: entry.ids.slice(),
+      patches: [],
+      request: () => api('POST', `/api/collections/${entry.collection.id}/images`, {
         ids: entry.ids,
         action: entry.inverse,
-      });
-      toast(`已撤回：${entry.label}`);
-      await syncAfterChange(entry.ids);
-    } else {
-      await api('POST', '/api/images/batch', { op: 'state', items: entry.patches });
-      toast(`已撤回：${entry.label}`);
-      await refreshAfterUndo(entry.patches.map((p) => p.id));
-    }
-  } catch (err) {
-    undoStack.push(entry);
-    if (err.message !== '未登录') toast(err.message);
-  } finally {
-    undoBusy = false;
+      }),
+      onError: (err) => {
+        const failed = knownItems(entry.ids);
+        setCollectionsLocal(entry.ids, collection, !wantAdd);
+        restoreItemsIntoRank(failed);
+        refreshLocalItems(failed);
+        undoStack.push(entry);
+        if (err.message !== '未登录') toast(`撤回失败：${err.message}`);
+      },
+    });
+    toast(`已撤回：${entry.label}`);
+    return;
   }
-}
 
-async function refreshAfterUndo(ids) {
-  if (state.mode === 'grid') {
-    await loadGrid(1, { keepSelection: true });
-  } else {
-    await loadRanking();
-    const index = state.rank.items.findIndex((x) => x.id === ids[0]);
-    if (index >= 0) {
-      state.rank.index = index;
-      renderRank();
+  const patches = entry.patches || [];
+  if (!patches.length) return;
+  const undoFields = patches.map(({ id, ...fields }) => ({ id, fields }));
+  // 撤回本身也可能失败；先记下撤回前的值，失败时原样放回去。
+  const beforeUndo = patches.map((patch) => {
+    const item = knownItem(patch.id);
+    const fields = {};
+    for (const key of Object.keys(patch)) {
+      if (key === 'id') continue;
+      fields[key] = item ? item[key] : null;
     }
-  }
-  if (state.detail) {
-    try {
-      const fresh = await api('GET', `/api/images/${state.detail.id}`);
-      state.detail = fresh;
-      if ($('#detail').open) renderDetail(fresh);
-    } catch { /* 忽略单张刷新失败 */ }
-  }
-  if (state.lightbox.on) renderLightbox();
-  refreshMeta();
+    return { id: patch.id, fields };
+  });
+  const undoTouched = applyLocalPatches(undoFields);
+  restoreItemsIntoRank(undoTouched);
+  refreshLocalItems(undoTouched);
+  if (state.mode === 'grid') loadGrid(1, { keepSelection: true });
+  enqueueOp({
+    seq: ++opSeq,
+    ids: patches.map((patch) => patch.id),
+    patches: undoFields,
+    request: () => api('POST', '/api/images/batch', { op: 'state', items: patches }),
+    onError: (err) => {
+      refreshLocalItems(applyLocalPatches(beforeUndo));
+      undoStack.push(entry);
+      if (err.message !== '未登录') toast(`撤回失败：${err.message}`);
+    },
+  });
+  toast(`已撤回：${entry.label}`);
 }
 
 /* ---------- Ranking ---------- */
@@ -791,6 +986,7 @@ async function loadRanking() {
   rank.loading = true;
   rankMore = null; // 旧筛选/旧列表的翻页请求作废（seq 会兜底）
   clearRankPrefetch();
+  removedItems.clear();
   $('#rank-img').hidden = true;
   $('#rank-empty').hidden = false;
   $('#rank-empty').textContent = '加载中…';
@@ -799,7 +995,7 @@ async function loadRanking() {
   try {
     const data = await api('GET', `/api/images?${imageQuery(1)}`);
     if (seq !== rank.seq) return;
-    rank.items = data.items;
+    rank.items = data.items.map(mergePendingFields).filter(inFilter);
     rank.index = 0;
     rank.stale = false;
     rank.page = data.page;
@@ -827,6 +1023,7 @@ function renderRank() {
   if (!item) {
     img.hidden = true;
     img.removeAttribute('src');
+    delete img.dataset.src;
     img.classList.remove('loaded');
     clearRankPrefetch();
     empty.hidden = false;
@@ -844,9 +1041,13 @@ function renderRank() {
   empty.hidden = true;
   img.hidden = false;
   img.alt = item.filename;
-  img.classList.remove('loaded');
-  img.src = item.full_url;
-  fadeIn(img);
+  // 同一张图只更新元数据时不重设 src，避免乐观更新时闪一下。
+  if (img.dataset.src !== item.full_url) {
+    img.dataset.src = item.full_url;
+    img.classList.remove('loaded');
+    img.src = item.full_url;
+    fadeIn(img);
+  }
   setRankControls(item);
   $('#rank-meta').textContent = rankMeta(item);
   $('#rank-prev').disabled = rank.index === 0;
@@ -884,9 +1085,12 @@ async function loadMoreRankingOnce() {
       rank.total = data.total;
       rank.last = data.last_page;
       rank.page = page;
-      const fresh = data.items.filter((x) => !seen.has(x.id));
+      const fresh = data.items
+        .map(mergePendingFields)
+        .filter((item) => !seen.has(item.id) && inFilter(item));
       if (fresh.length) {
         rank.items.push(...fresh);
+        for (const item of fresh) removedItems.delete(item.id);
         rank.stale = false;
         return true;
       }
@@ -924,85 +1128,48 @@ function prevImage() {
   renderRank();
 }
 
+const removedItems = new Map(); // 本地暂时移出 Ranking 的图，撤回时不用等接口就能放回来
+
 async function dropRankItem(id) {
   const rank = state.rank;
   const index = rank.items.findIndex((x) => x.id === id);
   if (index >= 0) {
+    removedItems.set(id, rank.items[index]);
+    if (removedItems.size > 100) removedItems.delete(removedItems.keys().next().value);
     rank.items.splice(index, 1);
     rank.total = Math.max(0, rank.total - 1);
     rank.stale = true;
   }
+  let needMore = false;
   if (rank.index >= rank.items.length) {
-    if (rank.page < rank.last || rank.stale) {
-      const more = await loadMoreRanking();
-      if (!more) rank.index = Math.max(0, rank.items.length - 1);
-    } else {
-      rank.index = Math.max(0, rank.items.length - 1);
-    }
+    if (rank.page < rank.last || rank.stale) needMore = true;
+    else rank.index = Math.max(0, rank.items.length - 1);
   }
+  // 先立刻显示下一张，再在后台补列表；网络慢时不阻塞操作。
   renderRank();
-}
-
-let ratingBusy = false;
-
-async function rateCurrent(score) {
-  const item = currentItem();
-  if (!item || ratingBusy) return;
-  ratingBusy = true;
-  const patch = metaPatch(item, ['score', 'trashed', 'rated_at']);
-  try {
-    const data = await api('POST', `/api/images/${item.id}/rate`, { score });
-    const updated = data.item;
-    pushUndo({ label: score === 0 ? '作废' : `打分 ★${score}`, patches: [patch] });
-    replaceItem(updated);
-    if (state.detail && state.detail.id === updated.id) state.detail = updated;
-    toast(score === 0 ? '已作废' : `已评 ${score} 星`);
-    if (!inFilter(updated)) {
-      await dropRankItem(updated.id);
-    } else {
-      renderRank();
-      const at = state.rank.index;
-      // 250ms 内自动前进到下一张；期间手动翻页则不再抢焦点。
-      setTimeout(() => {
-        if (state.mode !== 'ranking' || state.rank.index !== at) return;
-        if (currentItem()?.id !== updated.id) return;
-        nextImage(true);
-      }, 250);
-    }
-    refreshMeta();
-  } catch (err) {
-    if (err.message !== '未登录') toast(err.message);
-  } finally {
-    ratingBusy = false;
+  if (needMore) {
+    const more = await loadMoreRanking();
+    if (!more) rank.index = Math.max(0, rank.items.length - 1);
+    renderRank();
   }
 }
 
-async function toggleLovedCurrent() {
+const RATE_ADVANCE_MS = 140;
+
+function rateCurrent(score) {
   const item = currentItem();
   if (!item) return;
-  const patch = metaPatch(item, ['loved']);
-  try {
-    const data = await api('POST', `/api/images/${item.id}/loved`, { loved: !item.loved });
-    pushUndo({ label: patch.loved ? '取消收藏' : '收藏', patches: [patch] });
-    toast(data.item.loved ? '已收藏' : '已取消收藏');
-    afterSingleChange(data.item);
-  } catch (err) {
-    toast(err.message);
-  }
+  stageRate([item.id], score, { autoAdvance: true });
 }
 
-async function toggleTrashCurrent() {
+function toggleLovedCurrent() {
   const item = currentItem();
-  if (!item) return;
-  const patch = metaPatch(item, ['trashed']);
-  try {
-    const data = await api('POST', `/api/images/${item.id}/trash`, { trashed: !item.trashed });
-    pushUndo({ label: patch.trashed ? '移出 Trash' : '移入 Trash', patches: [patch] });
-    toast(data.item.trashed ? '已移入 Trash' : '已移出 Trash');
-    afterSingleChange(data.item);
-  } catch (err) {
-    toast(err.message);
-  }
+  if (item) stageLoved([item.id], !item.loved);
+}
+
+function toggleTrashCurrent() {
+  const item = currentItem();
+  if (item) stageTrash([item.id], !item.trashed, false);
 }
 
 function openRankCollectionMenu() {
@@ -1196,7 +1363,9 @@ async function loadGrid(page = 1, opts = {}) {
         state.anchor = null;
       }
     }
-    for (const item of data.items) {
+    for (const raw of data.items) {
+      const item = mergePendingFields(raw);
+      if (!inFilter(item)) continue; // 本地已改到别的筛选的 item 先不收进来
       grid.items.push(item);
       $('#grid').append(card(item, grid.items.length - 1));
     }
@@ -1571,28 +1740,44 @@ function openCollectionCheck(ids, x, y, owner) {
       tabindex: '-1',
       'aria-checked': String(on),
     }, el('span', { text: c.name }), el('span', { class: 'tick', text: on ? '✓' : '' }));
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', () => {
       const remove = allHave(c.id);
-      btn.disabled = true;
-      try {
-        await api('POST', `/api/collections/${c.id}/images`, { ids, action: remove ? 'remove' : 'add' });
-        pushUndo({
-          label: `${remove ? '移出' : '加入'}「${c.name}」`,
-          collection: { id: c.id, name: c.name },
-          ids: ids.slice(),
-          inverse: remove ? 'add' : 'remove',
-        });
-        toast(remove ? `已移出「${c.name}」` : `已加入「${c.name}」`);
-        await syncAfterChange(ids);
-        const now = allHave(c.id);
-        btn.setAttribute('aria-checked', String(now));
-        const tick = btn.querySelector('.tick');
-        if (tick) tick.textContent = now ? '✓' : '';
-      } catch (err) {
-        toast(err.message);
-      } finally {
-        btn.disabled = false;
-      }
+      const collection = { id: c.id, name: c.name };
+      const undoEntry = {
+        label: `${remove ? '移出' : '加入'}「${c.name}」`,
+        collection,
+        ids: ids.slice(),
+        inverse: remove ? 'add' : 'remove',
+      };
+      pushUndo(undoEntry);
+      setCollectionsLocal(ids, collection, !remove);
+      refreshLocalItems(ids.map(locateItem).filter(Boolean));
+      enqueueOp({
+        seq: ++opSeq,
+        ids: ids.slice(),
+        patches: [],
+        undoEntry,
+        request: () => api('POST', `/api/collections/${c.id}/images`, {
+          ids,
+          action: remove ? 'remove' : 'add',
+        }),
+        onError: (err) => {
+          const failed = knownItems(ids);
+          removeUndoEntry(undoEntry);
+          setCollectionsLocal(ids, collection, remove);
+          restoreItemsIntoRank(failed);
+          refreshLocalItems(failed);
+          btn.setAttribute('aria-checked', String(remove));
+          const tick = btn.querySelector('.tick');
+          if (tick) tick.textContent = remove ? '✓' : '';
+          if (err.message !== '未登录') toast(`操作失败：${err.message}`);
+        },
+      });
+      toast(remove ? `已移出「${c.name}」` : `已加入「${c.name}」`);
+      const now = !remove;
+      btn.setAttribute('aria-checked', String(now));
+      const tick = btn.querySelector('.tick');
+      if (tick) tick.textContent = now ? '✓' : '';
     });
     return el('li', { role: 'none' }, btn);
   });
@@ -1675,63 +1860,132 @@ window.addEventListener('blur', () => closeMenu());
 
 /* ---------- 批量操作 ---------- */
 
-async function rateIds(ids, score) {
+// 打分 / 收藏 / Trash / Collection 都是「先改本地，再排队后台确认」：
+// 接口慢时界面仍然即时响应；服务端返回后按顺序校准。
+function stageRate(ids, score, opts = {}) {
   if (!ids.length) return;
-  const patches = ids.map(locateItem).filter(Boolean).map((item) => metaPatch(item, ['score', 'trashed', 'rated_at']));
-  const label = score === 0 ? `作废 ${ids.length} 张` : `打分 ★${score}（${ids.length} 张）`;
-  try {
-    if (ids.length === 1) {
-      const data = await api('POST', `/api/images/${ids[0]}/rate`, { score });
-      toast(score === 0 ? '已作废' : `已评 ${score} 星`);
-      afterSingleChange(data.item);
-    } else {
-      const data = await api('POST', '/api/images/batch', { ids, op: 'rate', score });
-      toast(score === 0 ? `已作废 ${data.updated} 张` : `已给 ${data.updated} 张打分`);
-      await finishBatch();
+  const patches = [];
+  const oldPatches = [];
+  for (const id of ids) {
+    const item = locateItem(id);
+    if (!item) continue;
+    oldPatches.push(metaPatch(item, ['score', 'trashed', 'rated_at']));
+    patches.push({ id, fields: predictedRateFields(item, score) });
+  }
+  if (!patches.length) return;
+  const sendIds = patches.map((patch) => patch.id);
+  const undoEntry = {
+    label: score === 0
+      ? (sendIds.length === 1 ? '作废' : `作废 ${sendIds.length} 张`)
+      : (sendIds.length === 1 ? `打分 ★${score}` : `打分 ★${score}（${sendIds.length} 张）`),
+    patches: oldPatches,
+  };
+  pushUndo(undoEntry);
+  refreshLocalItems(applyLocalPatches(patches));
+  enqueueOp({
+    seq: ++opSeq,
+    ids: sendIds,
+    patches,
+    undoEntry,
+    request: () => (sendIds.length === 1
+      ? api('POST', `/api/images/${sendIds[0]}/rate`, { score })
+      : api('POST', '/api/images/batch', { ids: sendIds, op: 'rate', score })),
+  });
+  if (opts.autoAdvance) {
+    const advanceId = currentItem()?.id;
+    if (advanceId === sendIds[0]) {
+      setTimeout(() => {
+        if (state.mode !== 'ranking') return;
+        if (currentItem()?.id !== advanceId) return;
+        nextImage(true);
+      }, RATE_ADVANCE_MS);
     }
-    pushUndo({ label, patches });
-  } catch (err) {
-    toast(err.message);
+  }
+  if (sendIds.length > 1) finishBatch();
+  if (sendIds.length > 1) {
+    toast(score === 0 ? `已作废 ${sendIds.length} 张` : `已给 ${sendIds.length} 张打分`);
+  } else {
+    toast(score === 0 ? '已作废' : `已评 ${score} 星`);
   }
 }
 
-async function lovedIds(ids, value) {
-  if (!ids.length) return;
-  const patches = ids.map(locateItem).filter(Boolean).map((item) => metaPatch(item, ['loved']));
-  try {
-    if (ids.length === 1) {
-      const data = await api('POST', `/api/images/${ids[0]}/loved`, { loved: value });
-      toast(value ? '已收藏' : '已取消收藏');
-      afterSingleChange(data.item);
-    } else {
-      const data = await api('POST', '/api/images/batch', { ids, op: 'loved', loved: value });
-      toast(value ? `已收藏 ${data.updated} 张` : `已取消收藏 ${data.updated} 张`);
-      await finishBatch();
-    }
-    pushUndo({ label: value ? `收藏 ${ids.length} 张` : `取消收藏 ${ids.length} 张`, patches });
-  } catch (err) {
-    toast(err.message);
-  }
+function rateIds(ids, score) {
+  stageRate(ids, score);
 }
 
-async function trashIds(ids, value, ask) {
+function stageLoved(ids, value) {
+  if (!ids.length) return;
+  const patches = [];
+  const oldPatches = [];
+  for (const id of ids) {
+    const item = locateItem(id);
+    if (!item) continue;
+    oldPatches.push(metaPatch(item, ['loved']));
+    patches.push({ id, fields: { loved: value } });
+  }
+  if (!patches.length) return;
+  const sendIds = patches.map((patch) => patch.id);
+  const undoEntry = {
+    label: sendIds.length === 1
+      ? (value ? '收藏' : '取消收藏')
+      : (value ? `收藏 ${sendIds.length} 张` : `取消收藏 ${sendIds.length} 张`),
+    patches: oldPatches,
+  };
+  pushUndo(undoEntry);
+  refreshLocalItems(applyLocalPatches(patches));
+  enqueueOp({
+    seq: ++opSeq,
+    ids: sendIds,
+    patches,
+    undoEntry,
+    request: () => (sendIds.length === 1
+      ? api('POST', `/api/images/${sendIds[0]}/loved`, { loved: value })
+      : api('POST', '/api/images/batch', { ids: sendIds, op: 'loved', loved: value })),
+  });
+  if (sendIds.length > 1) finishBatch();
+  toast(value ? '已收藏' : '已取消收藏');
+}
+
+function lovedIds(ids, value) {
+  stageLoved(ids, value);
+}
+
+function stageTrash(ids, value, ask) {
   if (!ids.length) return;
   if (ask && !confirm(`将选中的 ${ids.length} 张移入 Trash？`)) return;
-  const patches = ids.map(locateItem).filter(Boolean).map((item) => metaPatch(item, ['trashed']));
-  try {
-    if (ids.length === 1) {
-      const data = await api('POST', `/api/images/${ids[0]}/trash`, { trashed: value });
-      toast(value ? '已移入 Trash' : '已移出 Trash');
-      afterSingleChange(data.item);
-    } else {
-      const data = await api('POST', '/api/images/batch', { ids, op: 'trash', trashed: value });
-      toast(value ? `已移入 Trash ${data.updated} 张` : `已移出 Trash ${data.updated} 张`);
-      await finishBatch();
-    }
-    pushUndo({ label: value ? `移入 Trash ${ids.length} 张` : `移出 Trash ${ids.length} 张`, patches });
-  } catch (err) {
-    toast(err.message);
+  const patches = [];
+  const oldPatches = [];
+  for (const id of ids) {
+    const item = locateItem(id);
+    if (!item) continue;
+    oldPatches.push(metaPatch(item, ['trashed']));
+    patches.push({ id, fields: { trashed: value } });
   }
+  if (!patches.length) return;
+  const sendIds = patches.map((patch) => patch.id);
+  const undoEntry = {
+    label: sendIds.length === 1
+      ? (value ? '移入 Trash' : '移出 Trash')
+      : (value ? `移入 Trash ${sendIds.length} 张` : `移出 Trash ${sendIds.length} 张`),
+    patches: oldPatches,
+  };
+  pushUndo(undoEntry);
+  refreshLocalItems(applyLocalPatches(patches));
+  enqueueOp({
+    seq: ++opSeq,
+    ids: sendIds,
+    patches,
+    undoEntry,
+    request: () => (sendIds.length === 1
+      ? api('POST', `/api/images/${sendIds[0]}/trash`, { trashed: value })
+      : api('POST', '/api/images/batch', { ids: sendIds, op: 'trash', trashed: value })),
+  });
+  if (sendIds.length > 1) finishBatch();
+  toast(value ? '已移入 Trash' : '已移出 Trash');
+}
+
+function trashIds(ids, value, ask) {
+  stageTrash(ids, value, ask);
 }
 
 async function organizeIds(ids, restore) {
@@ -1753,11 +2007,11 @@ async function organizeIds(ids, restore) {
   }
 }
 
-async function finishBatch() {
+// 批量操作的界面已经就地更新，不再整页重载等接口。
+function finishBatch() {
   state.selected.clear();
   state.anchor = null;
   renderBar();
-  await loadGrid(1);
 }
 
 $('#bar-rate').addEventListener('click', (e) => {
@@ -1913,25 +2167,37 @@ function renderDetailCollChecks(item) {
       type: 'checkbox',
       checked: item.collections.some((x) => x.id === c.id),
     });
-    input.addEventListener('change', async () => {
+    input.addEventListener('change', () => {
       const remove = !input.checked;
-      input.disabled = true;
-      try {
-        await api('POST', `/api/collections/${c.id}/images`, { ids: [item.id], action: remove ? 'remove' : 'add' });
-        pushUndo({
-          label: `${remove ? '移出' : '加入'}「${c.name}」`,
-          collection: { id: c.id, name: c.name },
+      const collection = { id: c.id, name: c.name };
+      const undoEntry = {
+        label: `${remove ? '移出' : '加入'}「${c.name}」`,
+        collection,
+        ids: [item.id],
+        inverse: remove ? 'add' : 'remove',
+      };
+      pushUndo(undoEntry);
+      setCollectionsLocal([item.id], collection, !remove);
+      refreshLocalItems([locateItem(item.id) || item]);
+      enqueueOp({
+        seq: ++opSeq,
+        ids: [item.id],
+        patches: [],
+        undoEntry,
+        request: () => api('POST', `/api/collections/${c.id}/images`, {
           ids: [item.id],
-          inverse: remove ? 'add' : 'remove',
-        });
-        toast(remove ? `已移出「${c.name}」` : `已加入「${c.name}」`);
-        await syncAfterChange([item.id]);
-      } catch (err) {
-        input.checked = !remove;
-        toast(err.message);
-      } finally {
-        input.disabled = false;
-      }
+          action: remove ? 'remove' : 'add',
+        }),
+        onError: (err) => {
+          const failed = knownItems([item.id]);
+          removeUndoEntry(undoEntry);
+          setCollectionsLocal([item.id], collection, remove);
+          restoreItemsIntoRank(failed);
+          refreshLocalItems(failed);
+          if (err.message !== '未登录') toast(`操作失败：${err.message}`);
+        },
+      });
+      toast(remove ? `已移出「${c.name}」` : `已加入「${c.name}」`);
     });
     return el('label', { class: 'coll-check' }, input, el('span', { text: c.name }));
   }));
