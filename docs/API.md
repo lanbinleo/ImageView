@@ -209,7 +209,7 @@
 
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
-| GET | `/api/settings` | – | `{"version": "0.4.0", "root": "D:/Pictures", "host": "0.0.0.0", "port": 17900, "data_dir": "D:/Apps/ImageView/data"}` |
+| GET | `/api/settings` | – | `{"version": "0.4.1", "root": "D:/Pictures", "host": "0.0.0.0", "port": 17900, "data_dir": "D:/Apps/ImageView/data"}` |
 | PUT | `/api/settings` | `{"root": "...", "current_password": "...", "new_password": "..."}` 均可选 | `{"ok": true, "scan_started": bool}` |
 
 - `root` 必须存在且是目录，否则 400；改变 root 后自动触发重扫描，`scan_started = true`（若已有扫描在跑则为 `false`）。

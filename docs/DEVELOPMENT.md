@@ -153,6 +153,7 @@ class TestSomething(ApiTestCase):
 - [ ] Grid：无限滚动、Ctrl/Shift 多选、框选、批量操作、右键菜单
 - [ ] Collection：新建 / 改名 / 删除、加图 / 移出、重名提示
 - [ ] 物理整理 / 恢复：整理后文件出现在 `_trash/`、页面显示已整理、恢复后回到原位
+- [ ] Trash 视图「一键物理整理」：一次整理全部未整理的图，文件进入 `_trash/`，列表自动刷新，按钮只在该视图出现
 - [ ] 手机（390×844）：Ranking、Grid 两列、灯箱、抽屉、设置页都可操作
 - [ ] 局域网另一台设备：能登录并使用
 - [ ] 深色 / 浅色主题切换后刷新不闪烁
@@ -166,7 +167,7 @@ class TestSomething(ApiTestCase):
 5. README「更新日志」补上本版本条目。
 6. `git status --short` 干净，确认没有 `data/`、`config.json`、`tests/samples/`、`.venv/`、`__pycache__`。
 7. 提交信息用 Conventional Commits（`feat:` / `fix:` / `docs:` / `chore:`），按意图拆分。
-8. 如果要打包发给别人，文件名带版本号（例如 `ImageView-v0.4.0.zip`），并排除 `.venv/`、`data/`、`config.json`、`tests/samples/`。
+8. 如果要打包发给别人，文件名带版本号（例如 `ImageView-v0.4.1.zip`），并排除 `.venv/`、`data/`、`config.json`、`tests/samples/`。
 
 ## 10. 常见开发问题
 
