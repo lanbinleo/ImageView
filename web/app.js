@@ -272,8 +272,15 @@ function renderMode() {
 }
 
 function loadActive() {
+  renderTrashActions();
   if (state.mode === 'grid') loadGrid(1);
   else loadRanking();
+}
+
+// 「一键物理整理」只在 Trash 视图里出现。
+function renderTrashActions() {
+  const box = $('#trash-actions');
+  if (box) box.hidden = state.filter.view !== 'trash';
 }
 
 function setMode(mode) {
@@ -2006,6 +2013,58 @@ async function organizeIds(ids, restore) {
     toast(err.message);
   }
 }
+
+// Trash 视图的一键整理：先取齐所有「在 Trash 且未整理」的 id，再走现有组织接口。
+async function fetchTrashOrganizeIds() {
+  const ids = [];
+  let page = 1;
+  for (;;) {
+    const params = new URLSearchParams({ view: 'trash', page: String(page), per_page: '200' });
+    const data = await api('GET', `/api/images?${params}`);
+    for (const item of data.items) {
+      if (item.trashed && !item.organized && !item.missing) ids.push(item.id);
+    }
+    if (page >= data.last_page) break;
+    page += 1;
+  }
+  return ids;
+}
+
+let organizeAllBusy = false;
+
+async function organizeAllTrash() {
+  if (organizeAllBusy) return;
+  organizeAllBusy = true;
+  const btn = $('#btn-organize-all');
+  const label = btn.textContent;
+  btn.disabled = true;
+  try {
+    btn.textContent = '读取 Trash…';
+    const ids = await fetchTrashOrganizeIds();
+    if (!ids.length) {
+      toast('Trash 中没有未整理的图片');
+      return;
+    }
+    if (!confirm(`将 Trash 中 ${ids.length} 张未整理的图片移入 <root>/_trash/？\n不会删除任何文件，之后可以恢复。`)) return;
+    btn.textContent = '整理中…';
+    const data = await api('POST', '/api/organize', { ids });
+    const moved = data.moved || 0;
+    const failed = data.failed || [];
+    const parts = [];
+    if (moved) parts.push(`已整理 ${moved} 张`);
+    if (failed.length) parts.push(`失败 ${failed.length} 张：${failed.map((f) => `#${f.id} ${f.reason || '未知原因'}`).join('；')}`);
+    toast(parts.length ? parts.join('；') : '没有可处理的图片');
+    await loadActive();
+  } catch (err) {
+    if (err.message !== '未登录') toast(err.message);
+  } finally {
+    organizeAllBusy = false;
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+$('#btn-organize-all').addEventListener('click', organizeAllTrash);
 
 // 批量操作的界面已经就地更新，不再整页重载等接口。
 function finishBatch() {

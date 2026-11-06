@@ -239,6 +239,10 @@ body.lightbox-open { overflow: hidden; }
 .grid-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .grid-bar select { padding: 5px 8px; font-size: 13px; }
 .grid-bar .muted { font-size: 12px; margin-left: auto; }
+.trash-actions { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.trash-actions button { padding: 5px 10px; font-size: 13px; }
+.trash-actions .muted { font-size: 12px; }
+.trash-actions code { font-size: 12px; }
 .hint { margin: 0 0 12px; font-size: 12px; }
 .grid {
   list-style: none; margin: 0; padding: 0;
