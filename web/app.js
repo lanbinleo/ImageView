@@ -280,6 +280,7 @@ function setMode(mode) {
   if (state.mode === mode) return;
   if (state.lightbox.on) closeLightbox();
   state.mode = mode;
+  if (mode === 'grid') clearRankPrefetch();
   renderMode();
   closeMenu();
   clearSelection();
@@ -712,12 +713,55 @@ function rankMeta(item) {
   return parts.join(' · ');
 }
 
-function preloadAround() {
+// Ranking 预加载：提前缓存前后几张原图，快速翻页时不再“到了才开始加载”。
+const PREFETCH_AHEAD = 4;
+const PREFETCH_BEHIND = 1;
+const PREFETCH_PAGE_AT = 4; // 距离当前页末尾还剩几张时预取下一页
+
+const rankPrefetch = new Map(); // full_url -> Image，持有引用避免请求被提前回收
+let rankMore = null; // 正在追加的下一页（避免并发重复请求）
+
+function prefetchRankUrl(url) {
+  if (!url || rankPrefetch.has(url)) return;
+  const img = new Image();
+  img.decoding = 'async';
+  img.src = url;
+  if (typeof img.decode === 'function') img.decode().catch(() => {});
+  rankPrefetch.set(url, img);
+}
+
+function clearRankPrefetch() {
+  for (const img of rankPrefetch.values()) img.src = '';
+  rankPrefetch.clear();
+}
+
+function prefetchRankWindow() {
   const rank = state.rank;
-  for (const delta of [-1, 1]) {
-    const item = rank.items[rank.index + delta];
-    if (item) new Image().src = item.full_url;
+  const keep = new Set();
+  const first = Math.max(0, rank.index - PREFETCH_BEHIND);
+  const last = Math.min(rank.items.length - 1, rank.index + PREFETCH_AHEAD);
+  for (let i = first; i <= last; i += 1) {
+    const item = rank.items[i];
+    if (!item) continue;
+    keep.add(item.full_url);
+    if (i !== rank.index) prefetchRankUrl(item.full_url);
   }
+  // 移出窗口的引用及时释放，避免长时间浏览占住已解码图片。
+  for (const [url, img] of rankPrefetch) {
+    if (keep.has(url)) continue;
+    img.src = '';
+    rankPrefetch.delete(url);
+  }
+}
+
+function maybePrefetchNextRankPage() {
+  const rank = state.rank;
+  if (rank.loading || rankMore) return;
+  if (!rank.stale && rank.page >= rank.last) return;
+  if (rank.index + 1 < rank.items.length - PREFETCH_PAGE_AT) return;
+  loadMoreRanking().then((more) => {
+    if (more) prefetchRankWindow();
+  });
 }
 
 function setRankControls(item) {
@@ -745,6 +789,8 @@ async function loadRanking() {
   const rank = state.rank;
   const seq = ++rank.seq;
   rank.loading = true;
+  rankMore = null; // 旧筛选/旧列表的翻页请求作废（seq 会兜底）
+  clearRankPrefetch();
   $('#rank-img').hidden = true;
   $('#rank-empty').hidden = false;
   $('#rank-empty').textContent = '加载中…';
@@ -782,6 +828,7 @@ function renderRank() {
     img.hidden = true;
     img.removeAttribute('src');
     img.classList.remove('loaded');
+    clearRankPrefetch();
     empty.hidden = false;
     empty.textContent = state.q
       ? `没有匹配「${state.q}」的图片`
@@ -805,21 +852,34 @@ function renderRank() {
   $('#rank-prev').disabled = rank.index === 0;
   $('#rank-next').disabled = false;
   renderProgress();
-  preloadAround();
+  prefetchRankWindow();
+  maybePrefetchNextRankPage();
   if (state.lightbox.on && state.lightbox.fromRank) renderLightbox();
 }
 
 // 追加下一页；localStorage 里筛选过的列表因评分移出会与分页错位，此时从头重扫并去重。
-async function loadMoreRanking() {
+// 手动翻页和后台预加载共用同一个请求，避免同一页并发拉取。
+function loadMoreRanking() {
   const rank = state.rank;
-  if (rank.loading) return false;
-  if (!rank.stale && rank.page >= rank.last) return false;
+  if (rankMore) return rankMore;
+  if (rank.loading) return Promise.resolve(false);
+  if (!rank.stale && rank.page >= rank.last) return Promise.resolve(false);
+  const req = loadMoreRankingOnce();
+  rankMore = req;
+  req.finally(() => { if (rankMore === req) rankMore = null; });
+  return req;
+}
+
+async function loadMoreRankingOnce() {
+  const rank = state.rank;
+  const seq = rank.seq;
   rank.loading = true;
   try {
     const seen = new Set(rank.items.map((x) => x.id));
     let page = rank.stale ? 1 : rank.page + 1;
     for (;;) {
       const data = await api('GET', `/api/images?${imageQuery(page)}`);
+      if (seq !== rank.seq) return false;
       applyMeta(data);
       rank.total = data.total;
       rank.last = data.last_page;
@@ -840,7 +900,7 @@ async function loadMoreRanking() {
     if (err.message !== '未登录') toast(err.message);
     return false;
   } finally {
-    rank.loading = false;
+    if (seq === rank.seq) rank.loading = false;
   }
 }
 
